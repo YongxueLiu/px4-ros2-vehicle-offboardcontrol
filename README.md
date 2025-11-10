@@ -143,8 +143,7 @@ import rclpy
 from offboard_control_lib import Vehicle
 
 def main():
-    # 初始化 ROS 2
-    rclpy.init()
+  
 
     # 创建 Vehicle 实例
     vehicle = Vehicle()
@@ -171,7 +170,7 @@ def main():
 
     finally:
         vehicle.close()
-        rclpy.shutdown()
+        
 
 if __name__ == '__main__':
     main()
@@ -199,26 +198,5 @@ Users provide positive `z` values (e.g., `2.0 = 2 meters high`); internally conv
 * 必须以 ≥ 2 Hz 的频率发送控制指令，否则 PX4 会自动退出 Offboard 模式
 * 本库通过内部定时器自动维持此频率
 
----
 
-### 提示 / Tip
-
-在运行前请确保：
-
-1. 已正确配置 ROS 2 环境变量：
-
-   ```bash
-   source /opt/ros/humble/setup.bash
-   ```
-2. 已启动 PX4 微 RTPS 代理：
-
-   ```bash
-   micrortps_agent -t UDP
-   ```
-
----
-
-```
-
----
 
