@@ -105,9 +105,13 @@ Must be called before program exit (recommended in a finally block)
 python
 #!/usr/bin/env python3
 
+import rclpy
 from offboard_control_lib import Vehicle
 
 def main():
+# 初始化 ROS 2
+# Initialize ROS 2
+rclpy.init()
 
 # 创建 Vehicle 实例（它是 rclpy.node.Node 的子类）
 # Create a Vehicle instance (subclass of rclpy.node.Node)
@@ -143,10 +147,11 @@ finally:
 # 清理 ROS 2 资源
 # Clean up ROS 2 resources
 vehicle.close()
-
+rclpy.shutdown()
 
 if __name__ == '__main__':
 main()
+🔔 注意：原始代码中缺少 rclpy.init() 和 rclpy.shutdown()，已在示例中补充以确保程序健壮性。
 
 6. 注意事项 / Important Notes
 
@@ -160,3 +165,5 @@ Control commands must be sent at ≥2 Hz, or PX4 will automatically exit Offboar
 本库通过内部定时器自动维持此频率
 This library maintains this rate automatically via an internal timer
 
+📌 提示 / Tip:
+请确保在运行前已正确配置 ROS 2 环境变量（如 source /opt/ros/humble/setup.bash）并启动 PX4 微 RTPS 代理（micrortps_agent）。
