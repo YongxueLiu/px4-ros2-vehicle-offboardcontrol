@@ -139,7 +139,7 @@ class OffboardControl(Node):
     def heartbeat_loop(self):
         """心跳主循环：每 1/20 秒发送一次控制信号"""
         """Heartbeat main loop: send control signal every 1/20 second"""
-        rate = 1.0 / float(self.heartbeat_hz)
+        rate = 1.0 / float(self.heartbeat_hz)  #TODO 使用ros2时间相关API，如rate,实现更精确控制
         self.get_logger().debug("[HEARTBEAT] Entering heartbeat loop...")
         while not self.stop_heartbeat.is_set() and rclpy.ok():
             try:
