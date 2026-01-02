@@ -12,7 +12,7 @@ GZ_WORLD_PATH="$HOME/.simulation-gazebo/worlds"
 PX4_PATH="$HOME/PX4-Autopilot"
 PYTHON_ENV_PATH="$HOME/myenv/bin/activate"
 QGC_PATH="$HOME/bin/QGroundControl-x86_64.AppImage"
-ROS_DISTRO="rolling"  # 或 iron, jazzy
+ROS_DISTRO="humble"  # 或 iron, jazzy
 
 # 仿真参数
 WORLD_NAME="default"
