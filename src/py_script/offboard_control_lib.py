@@ -1,3 +1,15 @@
+‘‘‘‘
+作者：刘永学
+邮箱：805110687@qq.com
+版权所有，仅限个人使用，不得用于商业目的
+’’’’
+
+'''
+All rights reserved! 
+'''
+
+
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
