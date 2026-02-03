@@ -66,12 +66,27 @@ init_qgroundcontrol() {
         }
 
         chmod +x "$QGC_PATH"
-        echo -e "${GREEN}✅ QGroundControl 已下载并赋予执行权限${NC}"
+
+        echo -e "${BLUE}➡️ 安装 QGroundControl 运行依赖（需要 sudo）...${NC}"
+
+        sudo apt update
+        sudo apt install -y \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav \
+            gstreamer1.0-gl \
+            libfuse2 \
+            libxcb-xinerama0 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor-dev || {
+                echo -e "${RED}❌ QGroundControl 依赖安装失败${NC}"
+                exit 1
+            }
+
+        echo -e "${GREEN}✅ QGroundControl 下载并初始化完成${NC}"
     else
-        echo -e "${GREEN}✅ QGroundControl 已存在${NC}"
+        echo -e "${GREEN}✅ QGroundControl 已存在，跳过下载和依赖安装${NC}"
     fi
 }
-
 
 # === 依赖检查 ===
 echo "🔍 检查依赖..."
