@@ -18,6 +18,60 @@ ROS_DISTRO="rolling"  # 或 iron, jazzy
 WORLD_NAME="default"
 PX4_MODEL="gz_x500"
 
+# =========================================================
+#  Gazebo worlds 自动初始化
+# =========================================================
+init_gazebo_worlds() {
+    if [[ ! -d "$GZ_WORLD_PATH" ]]; then
+        echo -e "${YELLOW}⚠️ 未发现 Gazebo worlds: $GZ_WORLD_PATH${NC}"
+        echo -e "${BLUE}➡️ 初始化 simulation-gazebo 资源...${NC}"
+
+        [[ -d "$GZ_SIM_PATH" ]] || {
+            echo -e "${RED}❌ 找不到 simulation/gz 路径: $GZ_SIM_PATH${NC}"
+            exit 1
+        }
+
+        mkdir -p "$HOME/.simulation-gazebo"
+
+        (
+            cd "$GZ_SIM_PATH"
+            echo -e "${BLUE}运行: python3 simulation-gazebo${NC}"
+            python3 simulation-gazebo
+        )
+
+        if [[ ! -d "$GZ_WORLD_PATH" ]]; then
+            echo -e "${RED}❌ Gazebo worlds 初始化失败${NC}"
+            exit 1
+        fi
+
+        echo -e "${GREEN}✅ Gazebo worlds 初始化完成${NC}"
+    else
+        echo -e "${GREEN}✅ Gazebo worlds 已存在${NC}"
+    fi
+}
+
+# =========================================================
+#  QGroundControl 自动下载
+# =========================================================
+init_qgroundcontrol() {
+    if [[ ! -f "$QGC_PATH" ]]; then
+        echo -e "${YELLOW}⚠️ 未发现 QGroundControl${NC}"
+        echo -e "${BLUE}➡️ 下载 QGroundControl AppImage...${NC}"
+
+        mkdir -p "$HOME/bin"
+
+        wget -O "$QGC_PATH" "$QGC_URL" || {
+            echo -e "${RED}❌ QGroundControl 下载失败${NC}"
+            exit 1
+        }
+
+        chmod +x "$QGC_PATH"
+        echo -e "${GREEN}✅ QGroundControl 已下载并赋予执行权限${NC}"
+    else
+        echo -e "${GREEN}✅ QGroundControl 已存在${NC}"
+    fi
+}
+
 
 # === 依赖检查 ===
 echo "🔍 检查依赖..."
