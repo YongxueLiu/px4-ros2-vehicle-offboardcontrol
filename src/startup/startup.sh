@@ -46,7 +46,7 @@ init_gazebo_worlds() {
             exit 1
         }
 
-        mkdir -p "$HOME/.simulation-gazebo"
+        # mkdir -p "$HOME/.simulation-gazebo"
 
         (
             cd "$GZ_SIM_PATH"
