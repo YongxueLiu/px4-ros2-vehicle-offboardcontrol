@@ -233,6 +233,132 @@ class OffboardControl(Node):
             self.target = (float(roll), float(pitch), float(yaw), float(thrust))
         self.get_logger().debug(f"🎯 [ATTITUDE] Updated from {old_target} → {self.target}")
 
+    
+    def request_vehicle_command(self, command, param1=0.0, param2=0.0):
+        """Send a vehicle command request."""
+        '''non-blocking'''
+        request = VehicleCommandSrv.Request()
+        msg = VehicleCommand()
+        # Ensure the parameters are floats
+        msg.param1 = float(param1)
+        msg.param2 = float(param2)
+        msg.command = command
+        msg.target_system = 1
+        msg.target_component = 1
+        msg.source_system = 1
+        msg.source_component = 1
+        msg.from_external = True
+        msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+        request.request = msg
+        self.service_done = False
+        self.service_result = None
+        future = self.vehicle_command_client.call_async(request)
+        #print(f'future:{future}')
+        #不等待服务返回\服务返回后，执行 response_callback(future).适合：不需要额外参数传回调
+        future.add_done_callback(partial(self.response_callback))
+        self.get_logger().info('Command sent (non-blocking)')
+
+    def response_callback(self, future):
+            """Handle the response from the vehicle command service."""
+            try:
+                response = future.result()
+                #print(f'response:{response}')
+                reply = response.reply
+                self.service_result = response.reply.result
+                if self.service_result == reply.VEHICLE_CMD_RESULT_ACCEPTED:
+                    self.get_logger().info('Command accepted')
+                elif self.service_result == reply.VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED:
+                    self.get_logger().warning('Command temporarily rejected')
+                elif self.service_result == reply.VEHICLE_CMD_RESULT_DENIED:
+                    self.get_logger().warning('Command denied')
+                elif self.service_result == reply.VEHICLE_CMD_RESULT_UNSUPPORTED:
+                    self.get_logger().warning('Command unsupported')
+                elif self.service_result == reply.VEHICLE_CMD_RESULT_FAILED:
+                    self.get_logger().warning('Command failed')
+                elif self.service_result == reply.VEHICLE_CMD_RESULT_IN_PROGRESS:
+                    self.get_logger().warning('Command in progress')
+                elif self.service_result == reply.VEHICLE_CMD_RESULT_CANCELLED:
+                    self.get_logger().warning('Command cancelled')
+                else:
+                    self.get_logger().warning('Command reply unknown')
+                self.service_done = True
+
+            except Exception as e:
+                self.get_logger().error(f'Service call failed: {e}')
+
+    async def request_vehicle_command_blocking(self, command, param1=0.0, param2=0.0, timeout_sec=5.0):
+        """
+        Send vehicle command and BLOCK (await) until response is received or timeout.
+
+        This function:
+        - Sends a command via call_async()
+        - Awaits the service response using asyncio.wait_for()
+        - Processes the result immediately (no callback needed)
+        """
+        # -------------------------
+        # 1. 构造服务请求
+        # -------------------------
+        request = VehicleCommandSrv.Request()
+        msg = VehicleCommand()
+
+        msg.param1 = float(param1)
+        msg.param2 = float(param2)
+        msg.command = command
+        msg.target_system = 1
+        msg.target_component = 1
+        msg.source_system = 1
+        msg.source_component = 1
+        msg.from_external = True
+        msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+
+        request.request = msg
+
+        self.get_logger().info(f"Sending command {command} (blocking for response)...")
+
+        # -------------------------
+        # 2. 异步发送并等待响应
+        # -------------------------
+        future = self.vehicle_command_client.call_async(request)
+
+        try:
+            # 👇 阻塞等待（await）
+            response = await asyncio.wait_for(future, timeout=timeout_sec)
+
+        except asyncio.TimeoutError:
+            self.get_logger().error(f"Command {command} timed out after {timeout_sec} seconds")
+            return None
+
+        except Exception as e:
+            self.get_logger().error(f"Service call failed: {e}")
+            return None
+
+        # -------------------------
+        # 3. 服务响应处理
+        # -------------------------
+        reply = response.reply
+        result = reply.result
+        self.service_result = result
+
+        if result == reply.VEHICLE_CMD_RESULT_ACCEPTED:
+            self.get_logger().info("Command accepted")
+        elif result == reply.VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED:
+            self.get_logger().warning("Command temporarily rejected")
+        elif result == reply.VEHICLE_CMD_RESULT_DENIED:
+            self.get_logger().warning("Command denied")
+        elif result == reply.VEHICLE_CMD_RESULT_UNSUPPORTED:
+            self.get_logger().warning("Command unsupported")
+        elif result == reply.VEHICLE_CMD_RESULT_FAILED:
+            self.get_logger().warning("Command failed")
+        elif result == reply.VEHICLE_CMD_RESULT_IN_PROGRESS:
+            self.get_logger().warning("Command in progress")
+        elif result == reply.VEHICLE_CMD_RESULT_CANCELLED:
+            self.get_logger().warning("Command cancelled")
+        else:
+            self.get_logger().warning("Command reply unknown")
+
+        return result
+
+
     # ---------------- 坐标系转换 | Coordinate Conversion ----------------
     def ned_to_enu(self, x_ned, y_ned, z_ned):
         """将 NED 坐标转为 ENU 坐标系"""
@@ -339,6 +465,33 @@ class OffboardControl(Node):
         self.get_logger().info("✅ Disarm command sent")
 
 
+    def arm_srv(self):
+        self.get_logger().info('Requesting arm')
+        self.request_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0)
+        while not self.service_done:
+            time.sleep(0.05)
+            self.get_logger().info('waiting for arm service to be done')
+        self.get_logger().info('arm service has done')
+        if self.service_result == 0:
+                self.get_logger().info('Vehicle is armed')
+                self.state = 'armed'
+        # record takeoff position and RTL position
+        with self.lock:
+            self.home_position = [
+                self.vehicle_local_position_enu.x,
+                self.vehicle_local_position_enu.y,
+                self.vehicle_local_position_enu.z,
+            ]
+        self.get_logger().info(f"🏠 Home position recorded: {self.home_position} (ENU)")
+
+
+    def disarm_srv(self):
+        self.get_logger().info('Requesting disarm')
+        self.request_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 0.0)
+
+
+
+
     def engage_offboard_mode(self, prewarm_count=10, prewarm_timeout=5.0):
         """
         进入 Offboard 模式前，需先预热（发送至少若干个控制点）
@@ -359,6 +512,28 @@ class OffboardControl(Node):
 
         self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=6.0)
         self.get_logger().info("✅ Switched to OFFBOARD mode!")
+
+
+     def engage_offboard_mode_srv(self, prewarm_count=10, prewarm_timeout=5.0):
+        """
+        进入 Offboard 模式前，需先预热（发送至少若干个控制点）
+        Must pre-warm by sending several setpoints before engaging offboard mode
+        """
+        self.get_logger().info(f"🔄 Engaging OFFBOARD mode (prewarm: {prewarm_count} msgs or {prewarm_timeout}s)")
+
+        start = time.time()
+        while self.offboard_setpoint_counter < prewarm_count and (time.time() - start) < prewarm_timeout and rclpy.ok():
+            time.sleep(0.05)
+
+        if self.offboard_setpoint_counter < prewarm_count:
+            self.get_logger().warning(
+                f"⚠️ Prewarm insufficient: only {self.offboard_setpoint_counter}/{prewarm_count} setpoints sent"
+            )
+        else:
+            self.get_logger().info(f"✅ Prewarm complete: {self.offboard_setpoint_counter} setpoints sent")
+        self.get_logger().info('Requesting switch to Offboard mode')
+        self.request_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, 1, 6)
+
 
 
     def hover(self, duration: float, timeout: float = None) -> bool:
