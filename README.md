@@ -198,5 +198,19 @@ Users provide positive `z` values (e.g., `2.0 = 2 meters high`); internally conv
 * 必须以 ≥ 2 Hz 的频率发送控制指令，否则 PX4 会自动退出 Offboard 模式
 * 本库通过内部定时器自动维持此频率
 
+'''
+================================================================================
+作者/Author: 刘永学/Liu Yongxue
+邮箱/Email: 805110687@qq.com
+QQ群：1080856708
+
+版权声明/Copyright Notice:
+© All rights reserved. 保留所有权利。
+
+使用许可/Usage License:
+仅供个人使用，禁止商业用途。
+For personal use only. Commercial use is prohibited.
+================================================================================
+'''
 
 
