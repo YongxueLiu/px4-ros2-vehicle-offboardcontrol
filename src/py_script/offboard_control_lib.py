@@ -39,16 +39,13 @@ from px4_msgs.msg import (
     VehicleLocalPosition,
     VehicleStatus,
     GotoSetpoint,
-    VehicleAttitude,
 )
-from sensor_msgs.msg import LaserScan
 import time
 import math
 import threading
 from rclpy.executors import MultiThreadedExecutor
 from px4_msgs.msg import VehicleAttitudeSetpoint
 import numpy as np  # 用于 NaN
-from scipy.spatial import cKDTree
 
 # ---------------- 常量定义 | Constants ----------------
 DISTANCE_TOLERANCE = 0.5  # 位置误差容忍度 (米) | Position error tolerance (meters)
@@ -99,14 +96,8 @@ class OffboardControl(Node):
         self.vehicle_status_subscriber = self.create_subscription(
             VehicleStatus, f'{namespace}/fmu/out/vehicle_status',
             self.vehicle_status_callback, qos_profile)
-        self.vehicle_attitude_subscriber = self.create_subscription(
-            VehicleAttitude, f'{namespace}/fmu/out/vehicle_attitude',
-            self.vehicle_attitude_callback, qos_profile)
-        self.lidar_scan_subscriber = self.create_subscription(
-            LaserScan, '/lidar_scan',
-            self.lidar_scan_callback, qos_profile)
 
-        self.get_logger().info("[SUB] Subscribed to local_position/status/attitude/lidar_scan")
+        self.get_logger().info("[SUB] Subscribed to vehicle_local_position_v1 and vehicle_status")
 
         # ---------------- 状态变量 | State Variables ----------------
         self.offboard_setpoint_counter = 0          # 心跳计数器 | Heartbeat counter
@@ -115,9 +106,6 @@ class OffboardControl(Node):
         self.vehicle_local_position_enu = VehicleLocalPosition()  # 存储转换后的 ENU 位置 | Store converted ENU position
         self.vehicle_local_position_received = False  # 是否收到有效位置 | Whether valid position received
         self.vehicle_status = VehicleStatus()         # 当前飞行器状态 | Current vehicle status
-        self.vehicle_attitude = None                # 姿态四元数缓存 | Cached attitude quaternion
-        self.lidar_scan = None                      # 激光雷达扫描缓存 | Cached lidar scan
-        self.dwa_active = False                     # DWA 模式标志 | DWA active flag
         self.control_mode = 'position'
 
         # 标志位与线程锁 | Flags & Thread Locks
@@ -446,135 +434,6 @@ class OffboardControl(Node):
         )
 
 
-    def vehicle_attitude_callback(self, msg: VehicleAttitude):
-        """姿态回调：缓存飞行器姿态四元数"""
-        with self.lock:
-            self.vehicle_attitude = msg
-
-    def lidar_scan_callback(self, msg: LaserScan):
-        """激光雷达回调：缓存扫描数据"""
-        with self.lock:
-            self.lidar_scan = msg
-
-    def quaternion_to_dcm(self, q: list[float]) -> np.ndarray:
-        """将四元数转换为方向余弦矩阵（FRD -> NED）。"""
-        w, x, y, z = q
-        return np.array([
-            [1 - 2 * y ** 2 - 2 * z ** 2, 2 * x * y - 2 * z * w, 2 * x * z + 2 * y * w],
-            [2 * x * y + 2 * z * w, 1 - 2 * x ** 2 - 2 * z ** 2, 2 * y * z - 2 * x * w],
-            [2 * x * z - 2 * y * w, 2 * y * z + 2 * x * w, 1 - 2 * x ** 2 - 2 * y ** 2],
-        ])
-
-    def is_obstacle_ahead(self, safe_dist: float) -> bool:
-        """判断机体前方是否存在障碍物（雷达前向 ±30°）。"""
-        with self.lock:
-            scan = self.lidar_scan
-        if scan is None:
-            return False
-
-        front_angle = math.radians(30.0)
-        min_dist = float('inf')
-        for i, r in enumerate(scan.ranges):
-            theta = scan.angle_min + i * scan.angle_increment
-            if abs(theta) <= front_angle and math.isfinite(r) and r > 0.0:
-                min_dist = min(min_dist, r)
-
-        self.throttle_log(0.5, f"[DWA] Front min distance: {min_dist:.2f} m", tag="dwa_front")
-        return min_dist < safe_dist
-
-    def compute_dwa(self, target_enu: list[float]) -> tuple[float, float, float]:
-        """计算 DWA 最优速度（FLU 局部坐标），返回 (vx, vy, w)。"""
-        with self.lock:
-            pos_ok = self.vehicle_local_position_received
-            pos = self.vehicle_local_position_enu
-            att = self.vehicle_attitude
-            scan = self.lidar_scan
-
-        if not pos_ok or att is None or scan is None:
-            self.throttle_log(1.0, "[DWA] Missing position/attitude/scan, output zero velocity", level="warning", tag="dwa_missing")
-            return 0.0, 0.0, 0.0
-
-        cur_ned = np.array(self.enu_to_ned(pos.x, pos.y, pos.z), dtype=float)
-        tgt_ned = np.array(self.enu_to_ned(target_enu[0], target_enu[1], target_enu[2]), dtype=float)
-        rel_ned = tgt_ned - cur_ned
-
-        dcm = self.quaternion_to_dcm(att.q)
-        rel_frd = dcm.T @ rel_ned
-        rel_flu = np.array([rel_frd[0], -rel_frd[1], -rel_frd[2]], dtype=float)
-        goal_heading = math.atan2(rel_flu[1], rel_flu[0])
-
-        obs = []
-        for i, r in enumerate(scan.ranges):
-            if math.isfinite(r) and r > 0.0:
-                theta = scan.angle_min + i * scan.angle_increment
-                obs.append((r * math.cos(theta), r * math.sin(theta)))
-
-        obs_points = np.array(obs) if obs else np.empty((0, 2))
-        obs_tree = cKDTree(obs_points) if len(obs_points) > 0 else None
-
-        max_speed = 1.0
-        max_w = math.pi / 2.0
-        v_samples = 10
-        w_samples = 20
-        dt = 0.2
-        predict_time = 1.0
-        steps = int(predict_time / dt)
-        robot_radius = 0.5
-        alpha, beta, gamma = 0.2, 0.2, 0.6
-
-        best_score = -float('inf')
-        best_vx = best_vy = best_w = 0.0
-
-        for vx in np.linspace(-max_speed, max_speed, v_samples):
-            for vy in np.linspace(-max_speed, max_speed, v_samples):
-                speed = math.hypot(vx, vy)
-                if speed > max_speed + 1e-6:
-                    continue
-
-                for w in np.linspace(-max_w, max_w, w_samples):
-                    x = y = th = 0.0
-                    collided = False
-                    min_dist = float('inf')
-                    for _ in range(steps):
-                        dx = vx * math.cos(th) - vy * math.sin(th)
-                        dy = vx * math.sin(th) + vy * math.cos(th)
-                        x += dx * dt
-                        y += dy * dt
-                        th += w * dt
-
-                        if obs_tree is not None:
-                            dist, _ = obs_tree.query([x, y])
-                            min_dist = min(min_dist, dist)
-                            if dist <= robot_radius:
-                                collided = True
-                                break
-
-                    if collided:
-                        continue
-
-                    if obs_tree is None:
-                        min_dist = max_speed * predict_time
-
-                    heading_score = (math.pi - abs(th - goal_heading)) / math.pi
-                    vel_score = speed / max_speed
-                    clear_score = min_dist / (max_speed * predict_time + 1e-6)
-                    score = alpha * heading_score + beta * vel_score + gamma * clear_score
-
-                    if score > best_score:
-                        best_score = score
-                        best_vx, best_vy, best_w = vx, vy, w
-
-        if best_score == -float('inf') or (best_vx == 0.0 and best_vy == 0.0):
-            self.throttle_log(1.0, "[DWA] No valid trajectory, rotate recovery", level="warning", tag="dwa_recovery")
-            if obs_tree is not None:
-                _, nearest_idx = obs_tree.query([0.0, 0.0])
-                nearest_theta = math.atan2(obs_points[nearest_idx][1], obs_points[nearest_idx][0])
-                best_w = math.copysign(max_w / 2.0, nearest_theta)
-
-        self.throttle_log(0.5, f"[DWA] best vx={best_vx:.2f}, vy={best_vy:.2f}, w={best_w:.2f}", tag="dwa_best")
-        return best_vx, best_vy, best_w
-
-
     # ---------------- 飞行器命令 | Vehicle Commands ----------------
     def arm(self):
         """发送解锁命令，并记录 Home 点"""
@@ -656,7 +515,7 @@ class OffboardControl(Node):
         self.get_logger().info("✅ Switched to OFFBOARD mode!")
 
 
-    def engage_offboard_mode_srv(self, prewarm_count=10, prewarm_timeout=5.0):
+     def engage_offboard_mode_srv(self, prewarm_count=10, prewarm_timeout=5.0):
         """
         进入 Offboard 模式前，需先预热（发送至少若干个控制点）
         Must pre-warm by sending several setpoints before engaging offboard mode
@@ -1039,72 +898,6 @@ class OffboardControl(Node):
         self.get_logger().warning("⚠️ Simulated land timed out!")
         # 超时后恢复悬停
         self.update_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
-        return False
-
-
-    def fly_to_trajectory_setpoint_dwa(self, x, y, z, yaw, timeout=60.0) -> bool:
-        """阻塞式 DWA 避障飞行到目标点（ENU 坐标）。"""
-        self.get_logger().info(
-            f"🧭 [DWA] Fly to target with avoidance: ({x:.2f}, {y:.2f}, {z:.2f}), yaw={math.degrees(yaw):.1f}°"
-        )
-        safe_dist = 3.0
-        target_enu = [float(x), float(y), float(z)]
-
-        start = time.time()
-        while rclpy.ok() and time.time() - start < timeout:
-            with self.lock:
-                if not self.vehicle_local_position_received:
-                    pos_ok = False
-                else:
-                    pos_ok = True
-                    cx = self.vehicle_local_position_enu.x
-                    cy = self.vehicle_local_position_enu.y
-                    cz = self.vehicle_local_position_enu.z
-                    ch = self.vehicle_local_position_enu.heading
-
-            if not pos_ok:
-                time.sleep(0.1)
-                continue
-
-            dist = math.sqrt((cx - x) ** 2 + (cy - y) ** 2 + (cz - z) ** 2)
-            yaw_diff = self.normalize_yaw(ch - yaw)
-            self.throttle_log(
-                1.0,
-                f"[DWA] Remaining distance: {dist:.2f} m, yaw diff: {yaw_diff:.2f} rad",
-                tag="flyto_dwa"
-            )
-            if dist < DISTANCE_TOLERANCE and yaw_diff < YAW_TOLERANCE:
-                self.update_position_setpoint(x, y, z, yaw)
-                self.get_logger().info("✅ [DWA] Target reached!")
-                return True
-
-            obstacle_ahead = self.is_obstacle_ahead(safe_dist)
-            if (not self.dwa_active) and obstacle_ahead:
-                self.dwa_active = True
-                self.get_logger().info("🚧 [DWA] Entering local avoidance mode")
-            elif self.dwa_active and (not self.is_obstacle_ahead(safe_dist * 1.5)):
-                self.dwa_active = False
-                self.get_logger().info("✅ [DWA] Exiting local avoidance mode")
-
-            if not self.dwa_active:
-                self.update_position_setpoint(x, y, z, yaw)
-            else:
-                vx_flu, vy_flu, w_flu = self.compute_dwa(target_enu)
-                w_frd = -w_flu
-                body_vel_frd = np.array([vx_flu, -vy_flu, 0.0], dtype=float)
-                with self.lock:
-                    att = self.vehicle_attitude
-                if att is None:
-                    self.update_velocity_setpoint(0.0, 0.0, 0.0, 0.0)
-                else:
-                    dcm = self.quaternion_to_dcm(att.q)
-                    ned_vel = dcm @ body_vel_frd
-                    vx_enu, vy_enu, vz_enu = self.ned_to_enu(ned_vel[0], ned_vel[1], ned_vel[2])
-                    self.update_velocity_setpoint(vx_enu, vy_enu, vz_enu, w_frd)
-
-            time.sleep(0.1)
-
-        self.get_logger().warning("⚠️ [DWA] fly_to_trajectory_setpoint_dwa timed out!")
         return False
 
 
