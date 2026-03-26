@@ -26,7 +26,7 @@ set -e  # 遇到错误时退出
 GZ_WORLD_PATH="$HOME/.simulation-gazebo/worlds"
 PX4_PATH="$HOME/PX4-Autopilot"
 PYTHON_ENV_PATH="$HOME/myenv/bin/activate"
-QGC_PATH="$HOME/bin/QGroundControl-x86_64.AppImage"
+QGC_PATH="$HOME/bin/QGroundControl.AppImage"
 ROS_DISTRO="rolling"  # 或 iron, jazzy
 
 # 仿真参数
