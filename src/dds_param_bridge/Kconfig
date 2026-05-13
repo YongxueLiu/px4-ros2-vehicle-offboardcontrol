@@ -1,0 +1,8 @@
+menuconfig MODULES_DDS_PARAM_BRIDGE
+	bool "DDS Parameter Bridge"
+	default n
+	---help---
+		Bridge DDS parameter_set_value_request to PX4 param_set() directly.
+		Allows ROS2/DDS to modify PX4 parameters without CONFIG_PARAM_PRIMARY
+		or CONFIG_ORB_COMMUNICATOR. Required for fmu-v5 and other boards
+		that do not support the primary/remote parameter sync mechanism.
